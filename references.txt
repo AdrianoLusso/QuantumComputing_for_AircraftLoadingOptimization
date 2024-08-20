@@ -1,0 +1,5 @@
+"Aircraft Loading Optimization -- QUBO models under multiple constraints"
+https://arxiv.org/abs/2102.09621
+
+Papers that reference the "Aircraft Loading Optimization -- QUBO models under multiple constraints"
+https://scholar.google.com/scholar?cites=17280810642504049715&as_sdt=2005&sciodt=0,5&hl=es
