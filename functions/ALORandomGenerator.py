@@ -58,9 +58,9 @@ class ALORandomGenerator:
             - a json with the instance attributes
         '''
 
-        containers,containers_weight,positions = self.create_containers_and_positions()
+        containers,containers_weight = self.__create_containers_and_weights()
 
-        containers_type,t_list,d_list = self.asociate_type_to_containers(containers)
+        containers_type,t_list,d_list = self.__asociate_type_to_containers(containers)
 
         # prepare the data structure and save it
         allBinaryVariables = list(range(self.num_containers * self.num_positions))
@@ -71,22 +71,21 @@ class ALORandomGenerator:
             "containers_type":containers_type,
             "t_list":t_list,
             "d_list":d_list,
+            "max_weight":self.max_weight,
             "allBinaryVariables":allBinaryVariables
         }
         json_data = json.dumps(data, indent=4)
         return json_data
     
-    def create_containers_and_positions(self):
+    def __create_containers_and_weights(self):
         '''
         '''
         containers = list(range(self.num_containers))
-        positions = list(range(self.num_positions))
-        # the containers weight are going to be normalized to a 0 to 1 range
-        containers_weight = [r.randint(0,self.max_weight) / self.max_weight for i in containers]
+        containers_weight = [r.randint(0,self.max_weight) for i in containers]
 
-        return containers,containers_weight,positions
+        return containers,containers_weight
     
-    def asociate_type_to_containers(self,containers):
+    def __asociate_type_to_containers(self,containers):
         '''
         '''
         containers_type = [r.randint(1,3) for i in containers]
