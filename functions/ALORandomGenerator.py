@@ -1,7 +1,5 @@
 import random as r
 import json
-import numpy as np
-import copy
 
 
 class ALORandomGenerator:
@@ -58,8 +56,8 @@ class ALORandomGenerator:
             - a json with the instance attributes
         '''
 
-        containers,containers_weight = self.__create_containers_and_weights()
 
+        containers,containers_weight = self.__create_containers_and_weights()
         containers_type,t_list,d_list = self.__asociate_type_to_containers(containers)
 
         # prepare the data structure and save it
@@ -79,6 +77,10 @@ class ALORandomGenerator:
     
     def __create_containers_and_weights(self):
         '''
+        This method create the container and its corresponding weights
+
+        Return:
+        the list of containers an a list of their weights.
         '''
         containers = list(range(self.num_containers))
         containers_weight = [r.randint(0,self.max_weight) for i in containers]
@@ -87,6 +89,14 @@ class ALORandomGenerator:
     
     def __asociate_type_to_containers(self,containers):
         '''
+        This method assig a random type to each container in the input list, and append its
+        corresponding d-value and t-value.
+
+        Parameters:
+            - containers
+
+        Return:
+            the lists of containers types, t-values and d-values.
         '''
         containers_type = [r.randint(1,3) for i in containers]
         t_list = [0.5 if type == 3 else 1 for type in containers_type]

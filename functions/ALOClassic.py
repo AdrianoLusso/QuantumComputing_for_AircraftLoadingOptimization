@@ -3,15 +3,14 @@ import itertools
 import sys
 import ipywidgets as widgets
 
-import docplex
 from docplex.mp.model import Model
 
 from openqaoa.problems.converters import FromDocplex2IsingModel
-from openqaoa import QUBO
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import matplotlib.colors as mcolors
+import time
+
 
 class ALOClassic:    
     '''  
@@ -25,7 +24,7 @@ class ALOClassic:
             It's expressed as a maximization problem.
 
         - QUBO form:
-            a quadratic unconstrained uptimization problem. As the formalism name says, it only accepts
+            a quadratic unconstrained optimization problem. As the formalism name says, it only accepts
             binary variables and the constraints are expressed as 'penalties' inside the objective function.
             It is expressed as a minimization problem, which would be later convenient for quantum algorithms.
             Each  binary variable x_{1*i+j} represents if the container 'i' is asigned to the plane position 'j'.
@@ -57,7 +56,7 @@ class ALOClassic:
         '''
         This method transforms the instance_dict of the ALO object into a:
             - docplex model with the QUBO formulation (no constraints, and just an objective function)
-            - an QUBO object from OpenQAOA, which represents the Ising formulation.
+            - a QUBO object from OpenQAOA, which represents the Ising formulation.
         
         Parameters:
             - unbalanced
@@ -65,7 +64,7 @@ class ALOClassic:
                 approach for the inequalities constraints. 
                 For the unbalanced approach, see https://iopscience.iop.org/article/10.1088/2058-9565/ad35e4.
             - lambdas
-                the set of parameters for the unbalanced approach (won't be used if unbalance = False)
+                the set of parameters for the unbalanced approach (won't be used if unbalanced = False)
             -multipliers
                 a number, or list of numbers, with the lagrange multipliers for the penalties that are not from the
                 unbalanced approach
@@ -74,6 +73,7 @@ class ALOClassic:
             - the Ising formulation, as a OpenQAOA's QUBO object
         '''
 
+        # make global variables from the instance_dict items
         for key, value in self.instance_dict.items():
             globals()[key] = value
         containers = range(num_containers)
@@ -146,11 +146,12 @@ class ALOClassic:
             print('quad. terms:')
             for quad_term in mdl_qubo.objective_expr.iter_quads():
                 print(quad_term)
+
         return ising,mdl_qubo
     
     def __unbalanced_penalization_approach(self,mdl,x,containers,positions):
         '''
-        This methods adds the 'no overlaps' and 'no duplicates' constraints for the unbalanced penalization
+        This method adds the 'no overlaps' and 'no duplicates' constraints for the unbalanced penalization
         approach of the ALO QUBO. These version are equalities constraints to 1.
 
         Parameters:
@@ -184,7 +185,7 @@ class ALOClassic:
 
     def __slack_variables_approach(self,mdl,x,containers,positions):
         '''
-        This methods adds the 'no overlaps' and 'no duplicates' constraints for the slack variables
+        This method adds the 'no overlaps' and 'no duplicates' constraints for the slack variables
         approach of the ALO QUBO. These versions are less or equal constraints to 1.
 
         Parameters:
@@ -219,30 +220,38 @@ class ALOClassic:
 
     def quboSolution_to_standardSolution(self,qubo_solution,check_feasibility = False,draw=False):
         '''
-        This method transforms a QUBO solution given into the corresponding standard solution
+        This method transforms a given QUBO solution into the corresponding standard formulation solution.
 
         Parameters:
-            - subo_solution
+            - qubo_solution
             - check_feasibility
-                if set to True, it will be checked the feasibility of the solution given
+                if True, the feasibility of the given qubo solution will be checked before the transformation
             - draw
-                if set to True, it will be drawn a graphical version of the solution
+                if set to True, the final standard solution will be graphically drawn
 
         Return:
             the solution in the standard formulation
         '''
 
-        # the solution is divide in subsolutions, where each subsolution is a vacant job and its J possible agents.
         if check_feasibility and not self.is_qubo_feasible(qubo_solution):
            raise ValueError('The qubo solution is not feasible')
         
+        # the solution is divided in subsolutions, where each subsolution is a container and its M possible positions.
         n = self.instance_dict['num_containers']
         m = self.instance_dict['num_positions']
         subsolutions = [qubo_solution[i:i+m] for i in range(0, len(qubo_solution), m)]
 
+
+        # an standard solution is a list of lists S. A sublist S[j] contains the containers in position j.
+        # the basic standard solution is a list where all its sublists are empty. That means, that no container
+        # is positioned yet.
         standard_solution = [[] for i in range(m)]
+        
+        # i go through each subsolution/container
         for container,subsolution in enumerate(subsolutions):
+            # look the positions where the container is
             positions = [i for i, c in enumerate(subsolution) if c == '1'] 
+            # i marked each poition ocuped by the container in the standard solution
             for p in positions:
                 standard_solution[p].append(container)
 
@@ -264,8 +273,7 @@ class ALOClassic:
         cmap = plt.get_cmap('hsv')
         colors = [cmap(i / num_containers) for i in range(num_containers)]
 
-        max_circles_per_cell = max(len(position) for position in standard_solution)
-        
+        max_circles_per_cell = max([len(position) for position in standard_solution]+[1])
         fig, ax = plt.subplots(figsize=(len(standard_solution), max_circles_per_cell / 2))
         ax.set_xlim(0, len(standard_solution))
         ax.set_ylim(0, max_circles_per_cell)
@@ -291,14 +299,13 @@ class ALOClassic:
 
 
     ''' CALCULATIONS '''
-    # TODO 
     def calculate_standard_gain(self,solution,minimization=False):
         ''' 
-       this method calculate the gain of a solution for the standard (constrained) ALO optimization function
+       this method calculate the gain of a solution for the standard ALO optimization function
 
         Parameters:
             - solution
-                the solution given should be given in a standard form. That is:
+                the solution given should be given in a standard formulation. That is:
                 a list [p_0 , p_1 , p_2 , ... , p_n] where each variable p_j is a position represented by
                 a list of integers values representing the containers. If a container c_i in is the sublist
                 p_j it means that it is occupying the position j.
@@ -312,11 +319,7 @@ class ALOClassic:
             - the gain of the solution given for the standard ALO
         '''        
         
-        # evaluate solution feasibility
-        if not self.is_qubo_feasible(solution):
-            raise ValueError('The solution is not feasible')
-
-        # eryfing that length of solution is the same as num_positions
+        # veryfing that length of solution is the same as num_positions
         if(len(solution) != self.instance_dict['num_positions']):
             raise ValueError('The length of the solution must be equal to num_positions = ',self.instance_dict['num_positions'])
 
@@ -326,7 +329,7 @@ class ALOClassic:
         # gain calculus
         gain = 0
         for j,position in enumerate(solution):
-            for i in enumerate(position):
+            for i in position:
                 gain += t_list[i] * containers_weight[i]  
 
         # if its necessary, translate from maximization problem gain to minimization problem cost
@@ -336,7 +339,13 @@ class ALOClassic:
     
     def is_qubo_feasible(self,solution):
         '''
-        TODO
+        This method return if a qubo solution is feasible
+
+        Parameters:
+            - solution
+            
+        Return:
+            True if the qubo is feasible, False if not
         '''
         solution = str(solution)
 
@@ -353,7 +362,7 @@ class ALOClassic:
 
 
     ''' SOLVERS '''
-    def solve_standard_with_bruteforce(self,debug_every=0,minimization=False):
+    def solve_standard_with_bruteforce(self,debug_every=0,minimization=False,sleep=0):
         ''' 
         this method solve the standard (constrained) ALO optimization function through brute force
 
@@ -386,7 +395,7 @@ class ALOClassic:
         # calculate the search space -- it will be a bitstring where each bit shows if a container
         # is positioned in the plane. It DOES NOT gives information on which exact position occupies.
         combinations = itertools.product(range(2),repeat=self.instance_dict['num_containers'])
-        total_combinations = (self.instance_dict['num_containers'])**2
+        total_combinations = 2**(self.instance_dict['num_containers'])
 
         opt_gain = None
         opt_combination = None
@@ -410,6 +419,9 @@ class ALOClassic:
 
             # if there isn't enough place, this combination is ignored
             if space_available < 0:
+                self.__complete_debug_solve_standard_with_bruteforce1(debug_every,sleep,itr_combination,
+                                                        minimization,output_area,total_combinations,
+                                                        combination,'no place enough',opt_gain,opt_combination)
                 #print('ERRO1')
                 continue
 
@@ -417,6 +429,9 @@ class ALOClassic:
             current_gain = sum(containers_weight[index] for index in  indexes)
             if current_gain > max_gain:
                 #print('ERRO2')
+                self.__complete_debug_solve_standard_with_bruteforce1(debug_every,sleep,itr_combination,
+                                                        minimization,output_area,total_combinations,
+                                                        combination,'too weight!',opt_gain,opt_combination)
                 continue
 
             if (opt_gain is None 
@@ -425,6 +440,15 @@ class ALOClassic:
                 #print('SUCCESS')
                 opt_gain = current_gain
                 opt_combination = combination
+
+            # debug prints
+            self.__complete_debug_solve_standard_with_bruteforce1(debug_every,sleep,itr_combination,
+                                                        minimization,output_area,total_combinations,
+                                                        combination,current_gain,opt_gain,opt_combination)
+            
+            if opt_gain == 100:
+                break
+
         #print(opt_combination)
         # from the optimal combination found, we store Containers objects with their data.
         containers = [
@@ -439,9 +463,17 @@ class ALOClassic:
         # preliminary optimal solution
         opt_solution = [[] for j in range(self.instance_dict['num_positions'])]
 
+        if debug_every != 0:
+            #output_area.close()
+            output_area = widgets.Output()
+            display(output_area)
+
         containers_assigned = []
         previous_type_3 = False
         for j,_ in enumerate(opt_solution):
+            # debug prints
+            self.__complete_debug_solve_standard_with_bruteforce2(debug_every,sleep,j,output_area,
+                                                        self.instance_dict['num_positions'],opt_solution)
             if previous_type_3:
                 previous_type_3 = False
                 continue
@@ -464,57 +496,21 @@ class ALOClassic:
                     if space_used >= 1:
                         #print('ERROR1')
                         break
-        
+        self.__complete_debug_solve_standard_with_bruteforce2(debug_every,sleep,j+1,output_area,
+                                                        self.instance_dict['num_positions'],opt_solution)
         return list(opt_solution),opt_gain
 
-                    
-
-
-        '''
-
-        ###################
-
-        weighted_priority_diff_matrix = self.instance_dict['weighted_priority_diff_matrix']
-        weighted_affinity_diff_matrix = self.instance_dict['weighted_affinity_diff_matrix'] 
-
-        # calculate the search space
-        combinations = itertools.product(range(-1,self.instance_dict['num_vacnJobs']),
-                                         repeat=self.instance_dict['num_agents'])
-        total_combinations = (self.instance_dict['num_vacnJobs']+1)**self.instance_dict['num_agents']
-        # do the brute force 
-        opt_gain = None
-        opt_solution = None
-        for itr_combination,combination in enumerate(combinations):
-            # if the combination doesn't respect the first constraint, it is not evaluated
-            if self.__violate_one_agent_per_job(combination):
-                self.__short_debug_solve_standard_with_bruteforce(debug_every,itr_combination,
-                                                        output_area,total_combinations,
-                                                        combination)
-                continue
-            # the combination gain is calculated
-            gain = self.calculate_standard_gain(combination,minimization)
-            
-            # if the current gain calculated is the optimal one, it is saved, as well for the combination
-            if (opt_gain is None 
-                or (not minimization and opt_gain < gain)
-                or (    minimization and opt_gain>gain)):
-                opt_gain = gain
-                opt_solution = combination
-
-            # debug prints
-            self.__complete_debug_solve_standard_with_bruteforce(debug_every,itr_combination,
-                                                        minimization,output_area,total_combinations,
-                                                        combination,gain,opt_gain,opt_solution)
-        
-        if debug_every != 0:
-            output_area.close()
-        return list(opt_solution),opt_gain
-           ''' 
     ''' AUXILIAR '''
 
     def violate_no_overlaps(self,solution):
         '''
-        TODO
+        This method return if a qubo solution violates the 'no-overlaps' constraint.
+
+        Parameters:
+            - solution
+            
+        Return:
+            True if the qubo is violated the constraint, False otherway.
         '''
 
         # the solution is divide in subsolutions, where each subsolution is a container and its J possible positions.
@@ -544,7 +540,13 @@ class ALOClassic:
     
     def violate_no_duplication(self,solution):
         '''
-        TODO
+        This method return if a qubo solution violates the 'no-duplication' constraint.
+
+        Parameters:
+            - solution
+            
+        Return:
+            True if the qubo is violated the constraint, False otherway.
         '''
 
         # the solution is divide in subsolutions, where each subsolution is a container and its J possible positions.
@@ -572,7 +574,13 @@ class ALOClassic:
     
     def violate_contiguity(self,solution):
         '''
-        TODO
+        This method return if a qubo solution violates the 'contiguit' constraint.
+
+        Parameters:
+            - solution
+            
+        Return:
+            True if the qubo is violated the constraint, False otherway.
         '''
 
         # the solution is divide in subsolutions, where each subsolution is a container and its J possible positions.
@@ -601,7 +609,13 @@ class ALOClassic:
 
     def violate_maximum_weight(self,solution):
         '''
-        TODO
+        This method return if a qubo solution violates the 'maximum weight' constraint.
+
+        Parameters:
+            - solution
+            
+        Return:
+            True if the qubo is violated the constraint, False otherway.
         '''
 
         # gets the data from the instanse
@@ -626,8 +640,8 @@ class ALOClassic:
         # the solution is feasible for this constraint
         return False
 
-    
-    def __complete_debug_solve_standard_with_bruteforce(self,debug_every,itr_combination,
+
+    def __complete_debug_solve_standard_with_bruteforce1(self,debug_every,sleep,itr_combination,
                                                         minimization,output_area,total_combinations,
                                                         combination,gain,opt_gain,opt_solution):
         if (debug_every > 0 
@@ -644,6 +658,7 @@ class ALOClassic:
                 #    self.__clear_previous_lines(8)
                 with output_area:
                     output_area.clear_output(wait=True)
+                    print('1ST STEP: FIND THE CONTAINERS THAT MAXIMIZES THE WEIGHT AND FIT INTO DE AIRCRAFT')
                     print('==========================================================')
                     print('ITERATION ',itr_combination+1,' OF ', total_combinations)
                     print('current combination: ',combination)
@@ -652,28 +667,33 @@ class ALOClassic:
                     print('current optimal ',text,': ',opt_gain)
                     print('current optimal solution: ',opt_solution)
                     print('==========================================================\n')
+                time.sleep(sleep) 
 
-    def __short_debug_solve_standard_with_bruteforce(self,debug_every,itr_combination,
-                                                        output_area,total_combinations,
-                                                        combination):
+    
+    def __complete_debug_solve_standard_with_bruteforce2(self,debug_every,sleep,itr_combination,output_area,
+                                                        total_combinations,opt_solution):
         if (debug_every > 0 
             and (
                 (itr_combination+1) % debug_every == 0 
                 or (itr_combination+1) == 1
                 or (itr_combination+1) == total_combinations)
             ):
+                #if itr_combination != 0:
+                #    self.__clear_previous_lines(8)
                 with output_area:
                     output_area.clear_output(wait=True)
+                    print('2ND STEP: ACCOMODATE THE CONTAINER IN THE AIRCRAFT POSITIONS')
                     print('==========================================================')
-                    print('ITERATION ',itr_combination+1,' OF ', total_combinations)
-                    print('current combination: ',combination)
-                    print()
-                    print()
-                    print()
-                    print()
+                    print('evaluating position ',itr_combination,'...')
+                    print('current optimal solution: ',opt_solution)
                     print('==========================================================\n')
+                time.sleep(sleep) 
+
 
 class Container:
+    '''
+    This is an auxiliary class for representing a container.
+    '''
     def __init__(self, id,weight,type, d):
         self.id = id
         self.weight = weight
