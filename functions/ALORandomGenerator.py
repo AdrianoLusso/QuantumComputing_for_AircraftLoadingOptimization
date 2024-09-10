@@ -83,7 +83,7 @@ class ALORandomGenerator:
         the list of containers an a list of their weights.
         '''
         containers = list(range(self.num_containers))
-        containers_weight = [r.randint(0,self.max_weight) for i in containers]
+        containers_weight = [r.randint(1,self.max_weight) for i in containers]
 
         return containers,containers_weight
     

@@ -7,9 +7,12 @@ from docplex.mp.model import Model
 
 from openqaoa.problems.converters import FromDocplex2IsingModel
 
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import time
+
+
 
 
 class ALOClassic:    
@@ -37,7 +40,7 @@ class ALOClassic:
     '''
 
     def __init__(self,instance_dict):
-          '''
+        '''
           Parameters:
             instance_dict:
                 A dictionary with the instance configuration. 
@@ -45,11 +48,15 @@ class ALOClassic:
                 or by manually defining its elements.
             
           '''
-          self.instance_dict = instance_dict
-          self.mdl_qubo = None
-          self.ising = None
+        self.instance_dict = instance_dict
+        self.mdl_qubo = None
+        self.ising = None
+          
+        self.optimal_standard_solution = None
+        self.optimal_standard_gain =  None
+        self.optimized_lambdas = None
+          
 
-    
 
     ''' REPRESENTATIONS '''
     def to_qubo_and_ising(self,unbalanced=True,lambdas=[0.9603,0.0371],multipliers=100,debug=False):
@@ -65,6 +72,7 @@ class ALOClassic:
                 For the unbalanced approach, see https://iopscience.iop.org/article/10.1088/2058-9565/ad35e4.
             - lambdas
                 the set of parameters for the unbalanced approach (won't be used if unbalanced = False)
+                or the keyword 'optimized', which means that and custom optimized lambdas will be calculated
             -multipliers
                 a number, or list of numbers, with the lagrange multipliers for the penalties that are not from the
                 unbalanced approach
@@ -84,6 +92,8 @@ class ALOClassic:
         x = mdl.binary_var_list(len(allBinaryVariables), name="x")
         
         # OBJECTIVE FUNCTION
+        # TODO MAYBE FIND A WAY TO MAKE X A 2-DIM ARRAY? IMPROVE READABILITY
+        # TODO THE INTRODUCTION NOTEBOOKS ARE IN SPANISH, TRANSLATE IT TO ENGLISH
         mdl.minimize(
             -mdl.sum(
                 t_i * m_i * x[num_positions * i + j] 
@@ -128,7 +138,7 @@ class ALOClassic:
             print('constraints:')
             for c in mdl.iter_constraints():
                 print(c)
-        
+
         # define the converter from docplex to ising model
         # for more details on how the converter works, see https://github.com/entropicalabs/openqaoa/blob/main/src/openqaoa-core/openqaoa/problems/converters.py#L9
         converter = FromDocplex2IsingModel(mdl, unbalanced_const=unbalanced,strength_ineq=lambdas,multipliers=multipliers)
@@ -147,7 +157,7 @@ class ALOClassic:
             for quad_term in mdl_qubo.objective_expr.iter_quads():
                 print(quad_term)
 
-        return ising,mdl_qubo
+        return ising,mdl_qubo,mdl
     
     def __unbalanced_penalization_approach(self,mdl,x,containers,positions):
         '''
@@ -259,6 +269,21 @@ class ALOClassic:
             self.draw_standard_solution(standard_solution,n)
         return standard_solution
 
+    def standardSolution_to_quboSolution(self,standard_solution,draw=False):
+        '''
+        '''
+        if draw:
+            self.draw_standard_solution(standard_solution,n)
+
+        num_containers = self.instance_dict['num_containers']
+        num_positions = self.instance_dict['num_positions']
+        qubo_solution = ['0' for i in range(num_containers*num_positions)]
+        for position_index,position in enumerate(standard_solution):
+            for container in position:
+                qubo_solution[container * num_positions + position_index] = '1'
+
+        return "".join(qubo_solution)
+
     def draw_standard_solution(self, standard_solution,num_containers=10):
         '''
         This method takes a standard solution of an ALO problem and show it in a graph.
@@ -299,6 +324,15 @@ class ALOClassic:
 
 
     ''' CALCULATIONS '''
+    
+    def __calculate_optimized_lambdas(self,mdl):
+        params = [0.9603,0.0371]
+        lambdas_cost_function = self.__create_lambdas_cost_function(mdl)
+
+        self.optimized_lambdas = minimize(lambdas_cost_function, params, method='Nelder-Mead')
+
+        return self.optimized_lambdas
+
     def calculate_standard_gain(self,solution,minimization=False):
         ''' 
        this method calculate the gain of a solution for the standard ALO optimization function
@@ -350,15 +384,14 @@ class ALOClassic:
         solution = str(solution)
 
         if (
-            not self.violate_no_overlaps(solution) 
-            and not self.violate_no_duplication(solution)
-            and not self.violate_contiguity(solution)
-            and not self.violate_maximum_weight(solution)           
+            self.violate_no_overlaps(solution) 
+            or self.violate_no_duplication(solution)
+            or self.violate_contiguity(solution)
+            or self.violate_maximum_weight(solution)           
         ):
-            return True
-        else:
             return False
-
+        else:
+            return True
 
 
     ''' SOLVERS '''
@@ -498,9 +531,44 @@ class ALOClassic:
                         break
         self.__complete_debug_solve_standard_with_bruteforce2(debug_every,sleep,j+1,output_area,
                                                         self.instance_dict['num_positions'],opt_solution)
+        
+        self.optimal_standard_solution = list(opt_solution)
+        self.optimal_standard_gain =  opt_gain
         return list(opt_solution),opt_gain
 
     ''' AUXILIAR '''
+
+    def __create_lambdas_cost_function(self,mdl):
+
+        if self.optimal_standard_solution is None:
+            self.solve_standard_with_bruteforce()
+
+        q = QAOA()
+        qiskit_device = create_device(location='local', name='vectorized')
+        q.set_device(qiskit_device)
+        q.set_circuit_properties(p=1, param_type='standard', init_type='ramp', mixer_hamiltonian='x')
+        q.set_backend_properties(prepend_state=None, append_state=None)
+        q.set_classical_optimizer(method='powell', maxfev=1000, tol=0.01,
+                                optimization_progress=True, cost_progress=True, parameter_log=True)
+        def cost(params): #FALTA MULTIPLIERS PARAM
+            multipliers=100 # this is the penalty value for P_O, P_D and P_W
+            
+            converterWrapper = FromDocplex2IsingModel(mdl, unbalanced_const=True,strength_ineq=params,multipliers=multipliers)
+
+            # gets the ising and qubo docplex
+            ising = converterWrapper.ising_model
+            
+            # compile, brute force solve and get energy
+            q.compile(ising)
+            q.solve_brute_force(verbose=False)
+            fake_opt_energy=q.brute_force_results['energy']
+
+            opt_qubo_solution = self.standardSolution_to_quboSolution(self.optimal_standard_solution)
+            opt_energy = bitstring_energy(q.cost_hamil,opt_qubo_solution)
+
+            return (fake_opt_energy - opt_energy)**2
+
+        return cost
 
     def violate_no_overlaps(self,solution):
         '''
@@ -598,7 +666,7 @@ class ALOClassic:
             while j < len(subsolution):
                 if subsolution[j] == '1':
                     # evaluate if the constraint has been broken
-                    if subsolution[j+1] != '1':
+                    if j+1 == len(subsolution) or subsolution[j+1] != '1':
                         return True
                     j = j + 2
                 else:
